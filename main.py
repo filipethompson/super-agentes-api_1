@@ -4,7 +4,6 @@ import logging
 import base64
 import os
 import requests
-import subprocess
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from selenium import webdriver
@@ -17,49 +16,46 @@ from selenium.webdriver.support import expected_conditions as EC
 # 🔹 Configuração de logs
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# 🔹 Função para iniciar o Ngrok automaticamente
-def iniciar_ngrok():
-    try:
-        logging.info("🔄 Iniciando Ngrok...")
-        subprocess.Popen(["ngrok", "http", "8000"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(3)  # Espera alguns segundos para garantir que o túnel está ativo
-        response = requests.get("http://127.0.0.1:4040/api/tunnels")
-        ngrok_url = response.json()["tunnels"][0]["public_url"]
-        logging.info(f"✅ Ngrok rodando em: {ngrok_url}")
-        return ngrok_url
-    except Exception as e:
-        logging.error(f"❌ Erro ao iniciar Ngrok: {str(e)}")
-        return None
-
-NGROK_URL = iniciar_ngrok()
-
-# 🔹 Configuração do WebDriver (Rodando em segundo plano para evitar travamentos)
+# 🔹 Configuração do WebDriver (Rodando em segundo plano)
 chrome_options = Options()
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
 chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-chrome_options.add_argument("--headless")  # ✅ Agora rodando SEM interface gráfica
+chrome_options.add_argument("--headless")  # ✅ Mantendo sem interface gráfica
 
 service = Service()
-driver = webdriver.Chrome(service=service, options=chrome_options)
+try:
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+    logging.info("✅ WebDriver iniciado com sucesso!")
+except Exception as e:
+    logging.error(f"❌ Erro ao iniciar WebDriver: {str(e)}")
+    driver = None
 
 # 🔹 Inicializa o FastAPI
 app = FastAPI()
+
 
 # 🔹 Modelo esperado na requisição
 class ConsultaComprovanteRequest(BaseModel):
     nota_fiscal: str
     data_emissao: str
 
+
 # 🔹 Função de login no Brudam
 def fazer_login():
     """Realiza login no sistema Brudam"""
+    if driver is None:
+        logging.error("❌ WebDriver não foi inicializado corretamente.")
+        return False
+
     try:
         logging.info("🔹 Iniciando login no sistema Brudam...")
         driver.get("https://glilogistica.brudam.com.br/index.php")
 
-        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.XPATH, '//*[@id="user"]'))).send_keys("FILIPE")
-        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.XPATH, '//*[@id="password"]'))).send_keys("Filipeif12345@")
+        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.XPATH, '//*[@id="user"]'))).send_keys(
+            "FILIPE")
+        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.XPATH, '//*[@id="password"]'))).send_keys(
+            "Filipeif12345@")
         WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="acessar"]'))).click()
 
         time.sleep(5)
@@ -74,9 +70,14 @@ def fazer_login():
         logging.error(f"❌ Erro no login: {str(e)}")
         return False
 
+
 # 🔹 Função para acessar a minuta
 def acessar_minuta(nota_fiscal):
     """Acessa a minuta pelo número da Nota Fiscal"""
+    if driver is None:
+        logging.error("❌ WebDriver não foi inicializado corretamente.")
+        return False
+
     try:
         logging.info(f"📌 Consultando Comprovante: NF {nota_fiscal}")
 
@@ -95,9 +96,14 @@ def acessar_minuta(nota_fiscal):
         logging.error(f"❌ Erro ao acessar minuta: {str(e)}")
         return False
 
+
 # 🔹 Função para baixar o comprovante
 def baixar_comprovante(nota_fiscal, data_emissao):
     """Baixa o comprovante da entrega e retorna a imagem em Base64"""
+    if driver is None:
+        logging.error("❌ WebDriver não foi inicializado corretamente.")
+        return None
+
     try:
         logging.info(f"📥 Iniciando download do comprovante para NF {nota_fiscal}, Data {data_emissao}...")
 
@@ -123,6 +129,7 @@ def baixar_comprovante(nota_fiscal, data_emissao):
         logging.error(f"❌ Erro ao baixar comprovante para NF {nota_fiscal}, Data {data_emissao}: {str(e)}")
         return None
 
+
 # 🔹 Endpoint para receber requisição do Super Agentes
 @app.post("/consulta_comprovante/")
 def consulta_comprovante(request: ConsultaComprovanteRequest):
@@ -145,8 +152,10 @@ def consulta_comprovante(request: ConsultaComprovanteRequest):
     logging.info(f"📌 Resultado Final: {resultado}")
     return resultado
 
+
 # 🔹 Executa o servidor FastAPI
 if __name__ == "__main__":
     import uvicorn
+
     logging.info("🚀 Subagente de consulta de comprovante iniciado. Aguardando requisições...")
     uvicorn.run(app, host="0.0.0.0", port=8000)
